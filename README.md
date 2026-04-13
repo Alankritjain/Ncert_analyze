@@ -1,102 +1,75 @@
 # NCERT Textbook Retrieval System
 
-A complete local Python pipeline for semantic search and retrieval of NCERT textbook content using paragraph-level chunking, sentence transformers, and ChromaDB.
+A complete local Python pipeline for semantic search and retrieval of NCERT textbook content using paragraph-level chunking, embeddings, and ChromaDB.
 
-## 🎯 Features
+**Status:** Phase 1-3 Complete | **Next:** ChromaDB Integration & API Layer
 
-- **Markdown Processing**: Parses NCERT textbooks in markdown format with heading hierarchy preservation
-- **Intelligent Chunking**: Paragraph-level chunking with context preservation
-- **Semantic Search**: Dense vector embeddings using `sentence-transformers/all-mpnet-base-v2`
-- **Vector Storage**: Efficient storage and retrieval using ChromaDB
-- **Rich Metadata**: Tracks class, subject, chapter, and heading context for every chunk
-- **Structured Output**: JSON export with consistent schema
-- **Ready for Integration**: Designed for easy FastAPI/Django backend integration
-- **Cross-Encoder Ready**: Architecture prepared for future reranking implementation
+## 🎯 What This Project Does
 
-## 📁 Project Structure
+Converts NCERT textbooks (Markdown) → Paragraph Chunks → Dense Embeddings → Ready for semantic search
 
+**Pipeline:**
 ```
-Ai_ML_sem4/
-├── config/
-│   ├── __init__.py
-│   └── config.py                    # Central configuration
-├── src/
-│   ├── __init__.py
-│   ├── parser/
-│   │   ├── __init__.py
-│   │   └── markdown_parser.py       # Markdown parsing with heading hierarchy
-│   ├── processing/
-│   │   ├── __init__.py
-│   │   ├── text_cleaner.py          # Text cleaning and normalization
-│   │   ├── chunker.py               # Paragraph-level chunking
-│   │   └── metadata_extractor.py    # Metadata extraction and enrichment
-│   ├── embedding/
-│   │   ├── __init__.py
-│   │   ├── embedder.py              # Sentence-transformers embedding
-│   │   └── vector_store.py          # ChromaDB interface
-│   └── retrieval/
-│       ├── __init__.py
-│       └── retriever.py             # Semantic search interface
-├── scripts/
-│   ├── ingest_pipeline.py           # End-to-end ingestion pipeline
-│   └── query_system.py              # Interactive query interface
-├── data/
-│   └── NCERT/                       # Input markdown files
-│       └── Class_10/
-│           └── Science/
-│               └── Book_1/
-│                   └── Chapter_01/
-│                       └── chapter.md
-├── output/
-│   └── chunks/                      # JSON output files
-├── chroma_db/                       # ChromaDB persistent storage
-├── logs/                            # Pipeline logs
-├── tests/
-│   └── test_examples.py            # Test cases
-├── requirements.txt
-├── sample_json_schema.json         # Chunk schema definition
-└── README.md
+Raw Markdown Files
+        ↓
+   Parse & Extract Headings (Phase 1-2)
+        ↓
+   Clean & Create Paragraph Chunks (Phase 1-2)
+        ↓
+   Generate 768-dim Embeddings (Phase 3)
+        ↓
+   JSON Output (Ready for ChromaDB) 
 ```
 
-## 🚀 Quick Start
+## ⚡ Quick Start (5 minutes)
 
 ### 1. Installation
 
 ```bash
-# Clone or navigate to project directory
-cd Ai_ML_sem4
-
-# Install dependencies
+cd c:\Ai_ML_sem4
 pip install -r requirements.txt
 ```
 
-### 2. Prepare Data
-
-Place your markdown files in the expected structure:
-
-```
-data/NCERT/Class_XX/Subject/Book_X/Chapter_XX/chapter.md
-```
-
-Example:
-```
-data/NCERT/Class_10/Science/Book_1/Chapter_01/chapter.md
-```
-
-### 3. Run Ingestion Pipeline
+### 2. Run Pipeline
 
 ```bash
-# Process all markdown files and build vector index
+# Full pipeline (Phase 1-2 + Phase 3)
+python run_pipeline.py
+
+# Phase 1-2 Only: Markdown → Chunks
 python scripts/ingest_pipeline.py
 
-# Clear existing data before ingestion
-python scripts/ingest_pipeline.py --clear-existing
-
-# Specify custom data directory
-python scripts/ingest_pipeline.py --data-dir path/to/data
+# Phase 3 Only: Chunks → Embeddings
+python scripts/generate_embeddings.py --input-json data/sample_phase3_input.json --output-json output/embeddings/phase3_embeddings.json
 ```
 
-### 4. Query the System
+### 3. Check Output
+
+- **Chunks:** `output/chunks/` (JSON with metadata)
+- **Embeddings:** `output/embeddings/` (JSON with 768-dim vectors)
+- **Logs:** `logs/` (detailed execution traces)
+
+## 📚 Full Documentation
+
+👉 **See [PROJECT.md](PROJECT.md)** for complete documentation including:
+- Detailed architecture
+- All features & capabilities
+- Configuration guide
+- Troubleshooting
+- Future roadmap
+- API reference
+
+## 📁 Key Directories
+
+| Directory | Purpose |
+|-----------|---------|
+| `src/` | Python source code (parser, processing, embedding) |
+| `scripts/` | CLI entry points (ingest, embeddings, query) |
+| `data/NCERT/` | Input markdown files |
+| `output/chunks/` | Phase 1-2 outputs (JSON chunks) |
+| `output/embeddings/` | Phase 3 outputs (embeddings with metadata) |
+| `config/` | Configuration files |
+| `tests/` | Test suite |
 
 ```bash
 # Interactive mode (recommended)

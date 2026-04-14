@@ -1,0 +1,60 @@
+{
+  "pipeline_phase": "phase3_embedding_generation",
+  "schema_version": "1.0",
+  "model": {
+    "name": "sentence-transformers/all-mpnet-base-v2",
+    "embedding_dimension": 768,
+    "device": "cpu",
+    "normalize_embeddings": true,
+    "generated_at": "2026-03-16T10:00:00+00:00"
+  },
+  "record_count": 2,
+  "records": [
+    {
+      "chunk_id": "class10_science_ch1_p003",
+      "text": "Nutrition is the process by which organisms obtain food.",
+      "metadata": {
+        "board": "NCERT",
+        "class": "10",
+        "subject": "Science",
+        "book": "Book_1",
+        "chapter": "Chapter_01",
+        "heading": "Life Processes",
+        "paragraph_number": 3
+      },
+      "embedding": [
+        0.013245,
+        -0.032187,
+        0.048211,
+        -0.005319,
+        0.021909,
+        -0.012008,
+        0.038721,
+        -0.009112
+      ]
+    },
+    {
+      "chunk_id": "class10_science_ch1_p004",
+      "text": "Autotrophic nutrition uses sunlight, chlorophyll, carbon dioxide, and water.",
+      "metadata": {
+        "board": "NCERT",
+        "class": "10",
+        "subject": "Science",
+        "book": "Book_1",
+        "chapter": "Chapter_01",
+        "heading": "Life Processes",
+        "paragraph_number": 4
+      },
+      "embedding": [
+        0.001231,
+        -0.027544,
+        0.041934,
+        -0.010922,
+        0.019845,
+        -0.006451,
+        0.033112,
+        -0.014003
+      ]
+    }
+  ]
+}

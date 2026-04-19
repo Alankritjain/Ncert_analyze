@@ -1,9 +1,17 @@
-"""Embedding generation utilities for chunk JSON files."""
+"""Embedding generation utilities for chunk JSON files.
+
+IMPROVED VERSION:
+- Preserves and stores ALL metadata (headings, chapter, subject) in ChromaDB
+- Uses context-prepended text for embedding (heading + paragraph)
+- Stores both raw and contextualized text
+- Adds question_number metadata for PYQs
+"""
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List
@@ -14,7 +22,13 @@ logger = logging.getLogger(__name__)
 
 
 class EmbeddingGenerator:
-    """Generate normalized embeddings from chunk payloads."""
+    """Generate normalized embeddings from chunk payloads.
+    
+    Key improvements:
+    1. Embeds context-prepended text (heading + paragraph) when available
+    2. Preserves all metadata fields through to ChromaDB
+    3. Adds instruction prefix for asymmetric retrieval models
+    """
 
     def __init__(
         self,
@@ -26,6 +40,71 @@ class EmbeddingGenerator:
         self.device = device
         self.batch_size = batch_size
         self.model = SentenceTransformer(model_name, device=device)
+
+    def _get_text_for_embedding(self, chunk: Dict) -> str:
+        """Get the best text representation for embedding.
+        
+        WHY: The 'text' field now contains heading-prepended text like:
+        '[Chemical Bonding > Ionic Bonds] In ionic bonding, ...'
+        
+        This is what we embed. The raw display text is preserved separately.
+        """
+        # Use context-prepended text if available (from improved chunking)
+        text = str(chunk.get("text", ""))
+        return text
+
+    def _build_rich_metadata(self, chunk: Dict) -> Dict:
+        """Build comprehensive metadata for ChromaDB storage.
+        
+        WHY: The original only stored source/file_name/paragraph_number.
+        By storing headings and chapter info, we enable:
+        1. Chapter-level filtering at query time
+        2. Better debugging and explainability
+        3. Heading context for display in results
+        
+        ChromaDB requires values to be str, int, float, or bool.
+        """
+        meta = {
+            "source": str(chunk.get("source", "ncert")),
+            "file_name": str(chunk.get("file_name", "")),
+            "paragraph_number": int(chunk.get("paragraph_number", 0)),
+        }
+
+        # --- NEW: Preserve heading context ---
+        heading_context = str(chunk.get("heading_context", ""))
+        if heading_context:
+            meta["heading_context"] = heading_context
+
+        for field in ["heading_h1", "heading_h2", "heading_h3"]:
+            val = str(chunk.get(field, "")).strip()
+            if val:
+                meta[field] = val
+
+        # Preserve chapter/subject/class metadata if present
+        for field in ["chapter", "subject", "class_name", "book", "year"]:
+            val = str(chunk.get(field, "")).strip()
+            if val:
+                meta[field] = val
+
+        for count_field in ["char_count", "word_count"]:
+            val = chunk.get(count_field)
+            if isinstance(val, int):
+                meta[count_field] = val
+
+        # For PYQs, preserve question number
+        qn = chunk.get("question_number", "")
+        if qn:
+            try:
+                meta["question_number"] = int(qn)
+            except (ValueError, TypeError):
+                meta["question_number"] = str(qn)
+
+        # Store raw text separately for display (without heading prefix)
+        raw_text = str(chunk.get("text_raw", "")).strip()
+        if raw_text:
+            meta["text_raw"] = raw_text[:500]  # ChromaDB has metadata size limits
+
+        return meta
 
     def generate(
         self,
@@ -43,7 +122,9 @@ class EmbeddingGenerator:
             raise ValueError(f"No chunks found in {chunks_json_path}")
 
         logger.info("Embedding input chunk count: %d", len(chunks))
-        texts = [str(item["text"]) for item in chunks]
+        
+        # Use context-prepended text for embedding
+        texts = [self._get_text_for_embedding(item) for item in chunks]
 
         embeddings = self.model.encode(
             texts,
@@ -55,16 +136,12 @@ class EmbeddingGenerator:
 
         records: List[Dict[str, object]] = []
         for chunk, embedding in zip(chunks, embeddings):
-            metadata = {
-                "source": chunk.get("source", "ncert"),
-                "file_name": chunk.get("file_name", ""),
-                "paragraph_number": int(chunk.get("paragraph_number", 0)),
-            }
             records.append(
                 {
                     "chunk_id": chunk["chunk_id"],
-                    "text": chunk["text"],
-                    "metadata": metadata,
+                    "text": chunk["text"],          # Context-prepended text
+                    "text_raw": chunk.get("text_raw", chunk["text"]),  # Raw display text
+                    "metadata": self._build_rich_metadata(chunk),
                     "embedding": embedding.tolist(),
                 }
             )

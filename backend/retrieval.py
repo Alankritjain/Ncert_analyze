@@ -1,8 +1,10 @@
 """
 Core retrieval function for NCERT paragraphs.
 
-This module uses the existing IntelligentQueryEngine from the main codebase
+This module uses the improved IntelligentQueryEngine from the main codebase
 to retrieve top 2 NCERT paragraphs for a given PYQ.
+
+IMPROVED: Works with the new hybrid retrieval engine (BM25 + vector + cross-encoder).
 """
 
 import sys
@@ -16,6 +18,7 @@ import math
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.retrieval.intelligent_query import IntelligentQueryEngine
+from src.pipeline.pyq_filter import is_valid_question
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +128,7 @@ class NCERTRetriever:
         overlap = sorted(list(query_tokens.intersection(para_tokens)))
         top_terms = ", ".join(overlap[:5]) if overlap else "key semantic concepts"
         return (
-            f"Rank #{rank} by cross-encoder relevance (score {score:.3f}); "
+            f"Rank #{rank} by hybrid relevance (score {score:.3f}); "
             f"matches query terms: {top_terms}."
         )
 
@@ -161,6 +164,7 @@ class NCERTRetriever:
             )
 
         # Stable ordering for a predictable sidebar experience.
+        items = [row for row in items if is_valid_question(row.get("text", ""))]
         items.sort(key=lambda row: (row.get("file_name", ""), row.get("_sort_qn", 0), row.get("pyq_id", "")))
         for row in items:
             row.pop("_sort_qn", None)
@@ -200,12 +204,17 @@ class NCERTRetriever:
         top_k_return: int = 2,
         top_k_candidates: int = 20,
     ) -> Dict:
-        """Return top matches with scores and chart-friendly diagnostics."""
+        """Return top matches with scores and chart-friendly diagnostics.
+        
+        IMPROVED: Uses the new hybrid retrieval pipeline.
+        """
         if not pyq_id or not pyq_id.strip():
             raise ValueError("pyq_id cannot be empty")
 
         selected_pyq = self._get_pyq_by_id_from_chroma(pyq_id.strip())
         query_text = selected_pyq["text"].strip()
+        
+        # Use new preprocessor
         query_text_for_retrieval = self.engine._prepare_query_text(query_text)
 
         query_embedding = self.engine.embedder.encode(
@@ -214,12 +223,18 @@ class NCERTRetriever:
             normalize_embeddings=True,
         ).tolist()
 
-        raw_results = self.engine.indexer.search(
-            query_embedding=query_embedding,
-            top_k=max(top_k_candidates, top_k_return),
-            filter_metadata={"source": "ncert"},
+        # --- IMPROVED: Hybrid retrieval (vector + BM25) ---
+        raw_results = self.engine._get_vector_results(
+            query_embedding, top_k=max(top_k_candidates, 30)
         )
-        ranked = self.engine._to_ranked_chunks(raw_results=raw_results, query_text=query_text_for_retrieval)
+        bm25_scores = self.engine._get_bm25_results(
+            query_text_for_retrieval, top_k=20
+        )
+        ranked = self.engine._to_ranked_chunks(
+            raw_results=raw_results,
+            query_text=query_text_for_retrieval,
+            bm25_scores=bm25_scores,
+        )
 
         matches = []
         for idx, row in enumerate(ranked[:top_k_return], start=1):
@@ -228,12 +243,14 @@ class NCERTRetriever:
                 {
                     "rank": idx,
                     "chunk_id": row.chunk_id,
-                    "text": row.text,
+                    "text": row.text_raw,  # Use raw text for display
                     "score": confidence,
                     "vector_score": float(row.vector_score),
+                    "rerank_score": float(row.rerank_score),
+                    "bm25_score": float(row.bm25_score),
                     "file_name": str(row.metadata.get("file_name", "")),
                     "paragraph_number": row.metadata.get("paragraph_number", ""),
-                    "reason": self._build_reason(query_text_for_retrieval, row.text, confidence, idx),
+                    "reason": self._build_reason(query_text_for_retrieval, row.text_raw, confidence, idx),
                 }
             )
 
@@ -246,7 +263,7 @@ class NCERTRetriever:
                     "score": confidence,
                     "chunk_id": row.chunk_id,
                     "file_name": str(row.metadata.get("file_name", "")),
-                    "text": row.text,
+                    "text": row.text_raw,  # Use raw text for display
                 }
             )
 

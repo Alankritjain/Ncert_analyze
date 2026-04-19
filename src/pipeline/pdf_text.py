@@ -82,6 +82,37 @@ class PDFTextExtractor:
             return "pyq"
         return "ncert"
 
+    @staticmethod
+    def _extract_metadata_from_path(pdf_path: Path) -> Dict[str, str]:
+        """Infer common metadata fields from file path and stem conventions."""
+        path_text = "/".join(part.lower() for part in pdf_path.parts)
+        stem = pdf_path.stem.lower()
+
+        metadata: Dict[str, str] = {}
+
+        class_match = re.search(r"class[_\s-]?(\d{1,2})", path_text)
+        if class_match:
+            metadata["class_name"] = f"class{class_match.group(1)}"
+
+        subject_match = re.search(r"(chemistry|biology|physics|maths|mathematics)", path_text)
+        if subject_match:
+            subj = subject_match.group(1)
+            metadata["subject"] = "maths" if subj == "mathematics" else subj
+
+        year_match = re.search(r"(19\d{2}|20\d{2})", stem)
+        if year_match:
+            metadata["year"] = year_match.group(1)
+
+        chapter_match = re.search(r"chapter[_\s-]?(\d{1,2})", path_text)
+        if chapter_match:
+            metadata["chapter"] = f"ch{int(chapter_match.group(1))}"
+
+        book_match = re.search(r"book[_\s-]?(\d{1,2})", path_text)
+        if book_match:
+            metadata["book"] = f"book{int(book_match.group(1))}"
+
+        return metadata
+
     def _txt_output_path(self, pdf_path: Path) -> Path:
         source = self._source_from_path(pdf_path)
         stem = re.sub(r"[^a-zA-Z0-9_\-]", "_", pdf_path.stem)
@@ -122,6 +153,7 @@ class PDFTextExtractor:
                     "pdf_file": str(pdf_file),
                     "text_file": str(output_path),
                     "file_name": pdf_file.name,
+                    **self._extract_metadata_from_path(pdf_file),
                 }
             )
             logger.info("Extracted %s -> %s", pdf_file.name, output_path)

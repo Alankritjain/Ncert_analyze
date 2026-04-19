@@ -9,12 +9,18 @@ import logging
 from typing import List
 from pathlib import Path
 from contextlib import asynccontextmanager
+import asyncio
+import sys
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from retrieval import NCERTRetriever
+try:
+    from .retrieval import NCERTRetriever
+except ImportError:
+    from retrieval import NCERTRetriever
 
 # Configure logging
 logging.basicConfig(
@@ -24,6 +30,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(BASE_DIR))
 
 # ============================================================================
 # Global Retriever Instance
@@ -129,6 +136,8 @@ class ParagraphMatch(BaseModel):
     text: str
     score: float
     vector_score: float
+    rerank_score: float
+    bm25_score: float
     file_name: str
     paragraph_number: str | int
     reason: str
@@ -155,6 +164,13 @@ class ErrorResponse(BaseModel):
     """Error response model."""
     detail: str = Field(description="Error message")
     code: str = Field(description="Error code")
+
+
+class UploadResponse(BaseModel):
+    """Response model for upload ingestion endpoint."""
+    status: str
+    chunks: int
+    file: str
 
 
 # ============================================================================
@@ -333,6 +349,51 @@ async def query_ncert(request: QueryRequest):
         )
 
 
+@app.post("/upload/pyq", response_model=UploadResponse, tags=["Upload"])
+async def upload_pyq(
+    file: UploadFile = File(...),
+    year: str = Form(...),
+    subject: str = Form(...),
+    class_name: str = Form(...),
+):
+    """Accept a PYQ PDF, ingest it, and return indexing status."""
+    if file.content_type not in {"application/pdf", "application/x-pdf", "application/octet-stream"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Only PDF files are supported",
+            headers={"X-Error-Code": "INVALID_FILE_TYPE"},
+        )
+
+    save_dir = BASE_DIR / "data" / "pyqs"
+    save_dir.mkdir(parents=True, exist_ok=True)
+    save_path = save_dir / file.filename
+    save_path.write_bytes(await file.read())
+
+    try:
+        from scripts.ingest_pipeline import run_ingestion
+
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: run_ingestion(
+                data_path=save_path,
+                source="pyq",
+                year=year,
+                subject=subject,
+                class_name=class_name,
+            ),
+        )
+    except Exception as exc:
+        logger.error("Upload ingestion failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to ingest uploaded PYQ: {exc}",
+            headers={"X-Error-Code": "UPLOAD_INGEST_FAILED"},
+        )
+
+    return UploadResponse(status="indexed", chunks=int(result.get("count", 0)), file=file.filename)
+
+
 # ============================================================================
 # Exception Handlers
 # ============================================================================
@@ -341,10 +402,15 @@ async def query_ncert(request: QueryRequest):
 async def http_exception_handler(request, exc):
     """Handle HTTP exceptions."""
     logger.error(f"HTTP Exception: {exc.status_code} - {exc.detail}")
-    return {
+    payload = {
         "detail": exc.detail,
-        "code": exc.headers.get("X-Error-Code", "UNKNOWN_ERROR") if exc.headers else "UNKNOWN_ERROR"
+        "code": exc.headers.get("X-Error-Code", "UNKNOWN_ERROR") if exc.headers else "UNKNOWN_ERROR",
     }
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=payload,
+        headers=exc.headers or None,
+    )
 
 
 # ============================================================================
@@ -371,6 +437,6 @@ if __name__ == "__main__":
         "main:app",
         host="0.0.0.0",
         port=8000,
-        reload=True,
+        reload=False,  # Disable reload to ensure src/ changes are picked up
         log_level="info"
     )

@@ -19,8 +19,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import argparse
 import json
 import logging
+import shutil
+import subprocess
 from datetime import datetime
-from typing import List, Dict
+from typing import List, Dict, Optional
 from tqdm import tqdm
 
 from config.config import Config
@@ -41,6 +43,150 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+
+def _run_command(command: List[str], cwd: Optional[Path] = None) -> None:
+    """Run a command and raise on non-zero exit status."""
+    logger.info("Running command: %s", " ".join(command))
+    result = subprocess.run(command, cwd=str(cwd) if cwd else None, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(f"Command failed ({result.returncode}): {' '.join(command)}")
+
+
+def _patch_manifest_metadata(
+    manifest_path: Path,
+    source: str,
+    staged_pdf_names: List[str],
+    class_name: Optional[str] = None,
+    subject: Optional[str] = None,
+    year: Optional[str] = None,
+    chapter: Optional[str] = None,
+    book: Optional[str] = None,
+) -> None:
+    """Patch output/raw_text manifest entries so metadata flows into chunk/embedding stages."""
+    if not manifest_path.exists():
+        logger.warning("Manifest not found for metadata patching: %s", manifest_path)
+        return
+
+    rows = json.loads(manifest_path.read_text(encoding="utf-8"))
+    staged_set = {name.lower() for name in staged_pdf_names}
+
+    for row in rows:
+        file_name = str(row.get("file_name", "")).lower()
+        if file_name not in staged_set:
+            continue
+
+        row["source"] = source
+        row["type"] = source
+        if class_name:
+            row["class_name"] = class_name
+        if subject:
+            row["subject"] = subject
+        if year:
+            row["year"] = str(year)
+        if chapter:
+            row["chapter"] = chapter
+        if book:
+            row["book"] = book
+
+    manifest_path.write_text(json.dumps(rows, indent=2, ensure_ascii=False), encoding="utf-8")
+    logger.info("Patched manifest metadata for %d staged files", len(staged_pdf_names))
+
+
+def run_ingestion(
+    data_path: Path,
+    source: str,
+    class_name: Optional[str] = None,
+    subject: Optional[str] = None,
+    year: Optional[str] = None,
+    chapter: Optional[str] = None,
+    book: Optional[str] = None,
+    clear_existing: bool = False,
+) -> Dict[str, object]:
+    """Run repeatable ingestion for uploaded PYQ/NCERT PDF files.
+
+    This path is used by Prompt-04 style ingestion and the upload endpoint.
+    """
+    project_root = Path(__file__).resolve().parent.parent
+    python_exe = sys.executable
+
+    data_path = Path(data_path)
+    if not data_path.exists():
+        raise FileNotFoundError(f"Input path not found: {data_path}")
+
+    if data_path.is_file():
+        pdf_files = [data_path] if data_path.suffix.lower() == ".pdf" else []
+    else:
+        pdf_files = sorted(data_path.rglob("*.pdf"))
+
+    if not pdf_files:
+        raise ValueError("No PDF files found. Prompt 04 workflow expects PDF uploads for this path.")
+
+    stage_root = project_root / "media" / ("pyqs" if source == "pyq" else "ncert_uploads")
+    stage_root.mkdir(parents=True, exist_ok=True)
+
+    staged_names: List[str] = []
+    for pdf in pdf_files:
+        target = stage_root / pdf.name
+        if pdf.resolve() != target.resolve():
+            shutil.copy2(pdf, target)
+        staged_names.append(target.name)
+
+    raw_text_dir = project_root / "output" / "raw_text_upload"
+    chunks_dir = project_root / "output" / "chunks_upload"
+    chunks_file = chunks_dir / "all_chunks.json"
+    embeddings_file = project_root / "output" / "embeddings" / "upload_embeddings.json"
+
+    if raw_text_dir.exists():
+        shutil.rmtree(raw_text_dir)
+    if chunks_dir.exists():
+        shutil.rmtree(chunks_dir)
+
+    _run_command(
+        [python_exe, "scripts/pdf_to_text.py", "--media-dir", str(stage_root), "--raw-text-dir", str(raw_text_dir)],
+        cwd=project_root,
+    )
+
+    _patch_manifest_metadata(
+        manifest_path=raw_text_dir / "manifest.json",
+        source=source,
+        staged_pdf_names=staged_names,
+        class_name=class_name,
+        subject=subject,
+        year=year,
+        chapter=chapter,
+        book=book,
+    )
+
+    _run_command(
+        [python_exe, "scripts/text_to_chunks.py", "--raw-text-dir", str(raw_text_dir), "--chunks-dir", str(chunks_dir)],
+        cwd=project_root,
+    )
+    _run_command(
+        [python_exe, "scripts/generate_embeddings.py", "--chunks-json", str(chunks_file), "--output-json", str(embeddings_file), "--device", "cpu"],
+        cwd=project_root,
+    )
+
+    chroma_cmd = [
+        python_exe,
+        "scripts/chroma_store.py",
+        "--embeddings-json",
+        str(embeddings_file),
+        "--chroma-dir",
+        str(project_root / "chroma_db"),
+        "--collection",
+        "ncert_chemistry",
+    ]
+    if clear_existing:
+        chroma_cmd.append("--reset")
+    _run_command(chroma_cmd, cwd=project_root)
+
+    return {
+        "status": "indexed",
+        "source": source,
+        "files": [str(p.name) for p in pdf_files],
+        "count": len(pdf_files),
+    }
 
 
 class IngestionPipeline:
@@ -292,24 +438,51 @@ def main():
         action='store_true',
         help='Clear existing data in vector store before ingestion'
     )
+    parser.add_argument(
+        '--source',
+        type=str,
+        choices=['pyq', 'ncert'],
+        default=None,
+        help='Source type for Prompt-04 upload ingestion workflow'
+    )
+    parser.add_argument('--class', dest='class_name', type=str, default=None, help='Class metadata, e.g. class12')
+    parser.add_argument('--subject', type=str, default=None, help='Subject metadata, e.g. chemistry')
+    parser.add_argument('--year', type=str, default=None, help='Year metadata for PYQ files, e.g. 2024')
+    parser.add_argument('--chapter', type=str, default=None, help='Chapter metadata, e.g. ch5')
+    parser.add_argument('--book', type=str, default=None, help='Book metadata, e.g. book1')
     
     args = parser.parse_args()
     
-    # Create and run pipeline
-    pipeline = IngestionPipeline(
-        data_dir=args.data_dir,
-        clear_existing=args.clear_existing
-    )
-    
     try:
+        if args.source:
+            if not args.data_dir:
+                raise ValueError("--data-dir is required when --source is provided")
+
+            result = run_ingestion(
+                data_path=Path(args.data_dir),
+                source=args.source,
+                class_name=args.class_name,
+                subject=args.subject,
+                year=args.year,
+                chapter=args.chapter,
+                book=args.book,
+                clear_existing=args.clear_existing,
+            )
+            logger.info("\n✓ Upload ingestion completed successfully: %s", result)
+            sys.exit(0)
+
+        # Default behavior: legacy markdown ingestion pipeline.
+        pipeline = IngestionPipeline(
+            data_dir=args.data_dir,
+            clear_existing=args.clear_existing
+        )
         stats = pipeline.run()
-        
+
         if stats['chunks_indexed'] > 0:
             logger.info("\n✓ Pipeline completed successfully!")
             sys.exit(0)
-        else:
-            logger.error("\n✗ Pipeline completed but no chunks were indexed")
-            sys.exit(1)
+        logger.error("\n✗ Pipeline completed but no chunks were indexed")
+        sys.exit(1)
             
     except KeyboardInterrupt:
         logger.warning("\n⚠ Pipeline interrupted by user")

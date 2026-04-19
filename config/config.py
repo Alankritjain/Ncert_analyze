@@ -28,8 +28,12 @@ class Config:
     }
     
     # Embedding model configuration
+    # OPTION A (current): Good general-purpose model
     EMBEDDING_MODEL = "sentence-transformers/all-mpnet-base-v2"
     EMBEDDING_DIMENSION = 768  # Dimension for all-mpnet-base-v2
+    # OPTION B (recommended upgrade): Better retrieval-optimized model
+    # EMBEDDING_MODEL = "BAAI/bge-base-en-v1.5"
+    # EMBEDDING_DIMENSION = 768
     DEVICE = "cpu"  # Change to "cuda" if GPU available
 
     # Phase 3: Embedding generation configuration
@@ -51,11 +55,13 @@ class Config:
     
     # Chunking configuration
     CHUNKING = {
-        "strategy": "paragraph",  # paragraph-based chunking
-        "min_chunk_size": 50,      # Minimum characters per chunk
-        "max_chunk_size": 1000,    # Maximum characters per chunk
-        "overlap": 50,             # Character overlap between chunks
-        "preserve_headings": True, # Keep heading context
+        "strategy": "heading_aware",  # IMPROVED: heading-context-aware chunking
+        "min_chunk_size": 60,         # Minimum characters per chunk
+        "max_chunk_size": 1500,       # Maximum characters per chunk
+        "merge_threshold": 200,       # Merge paragraphs shorter than this
+        "overlap_sentences": 1,       # Sentence overlap between split chunks
+        "preserve_headings": True,    # Keep heading context
+        "prepend_heading": True,      # Prepend heading to chunk text for embedding
         "split_on": ["\n\n", "\n", ". "]  # Split delimiters in order of preference
     }
     
@@ -92,11 +98,19 @@ class Config:
     
     # Retrieval configuration
     RETRIEVAL = {
-        "top_k": 5,                    # Number of results to retrieve
-        "score_threshold": 0.5,        # Minimum similarity score
-        "rerank": False,               # Enable cross-encoder reranking (future)
-        "rerank_model": None,          # Placeholder for cross-encoder
-        "rerank_top_k": 3              # Results after reranking
+        "top_k": 10,                   # Initial retrieval pool
+        "score_threshold": 0.15,       # Minimum hybrid score to return
+        "rerank": True,                # ENABLED: cross-encoder reranking
+        "rerank_model": "cross-encoder/ms-marco-MiniLM-L-12-v2",  # L-12 is much better than L-6
+        "rerank_top_k": 2,             # Return top 2 after reranking
+        "vector_candidates": 30,       # Candidates from vector search
+        "bm25_candidates": 20,         # Candidates from BM25
+        "hybrid_weights": {            # Fusion weights
+            "rerank": 0.55,
+            "vector": 0.20,
+            "bm25": 0.15,
+            "keyword": 0.10,
+        }
     }
     
     # JSON output schema version

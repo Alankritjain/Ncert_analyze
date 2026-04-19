@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Loader2,
   LayoutList,
+  Search,
   BarChart3,
   PanelLeftClose,
   PanelLeftOpen,
@@ -81,6 +82,8 @@ export default function QueryPage() {
   const [selectedCandidate, setSelectedCandidate] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [expandedCandidates, setExpandedCandidates] = useState({});
+  const [searchQuery, setSearchQuery] = useState('');
+  const [focusedIdx, setFocusedIdx] = useState(-1);
 
   /* —— fetch PYQs on mount —— */
   useEffect(() => {
@@ -146,6 +149,50 @@ export default function QueryPage() {
     }));
   }, [result]);
 
+  const filteredPyqs = useMemo(
+    () =>
+      pyqs.filter((q) => {
+        if (!searchQuery) return true;
+        const needle = searchQuery.toLowerCase();
+        return (
+          q.text?.toLowerCase().includes(needle) ||
+          q.file_name?.toLowerCase().includes(needle)
+        );
+      }),
+    [pyqs, searchQuery]
+  );
+
+  const groupedPyqs = useMemo(() => {
+    const groups = {};
+    filteredPyqs.forEach((q) => {
+      const key = q.file_name || 'Unknown';
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(q);
+    });
+    return groups;
+  }, [filteredPyqs]);
+
+  const handleSidebarKeyDown = (e) => {
+    if (!filteredPyqs.length) return;
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setFocusedIdx((i) => Math.min(i + 1, filteredPyqs.length - 1));
+      return;
+    }
+
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setFocusedIdx((i) => Math.max(i - 1, 0));
+      return;
+    }
+
+    if (e.key === 'Enter' && focusedIdx >= 0) {
+      e.preventDefault();
+      handleSelectPyq(filteredPyqs[focusedIdx]);
+    }
+  };
+
   /* ================================================================== */
   return (
     <div className="query-layout">
@@ -169,29 +216,60 @@ export default function QueryPage() {
 
         <p className="sidebar-count">{pyqs.length} questions</p>
 
-        <div className="sidebar-list">
+        <div className="sidebar-search">
+          <Search size={14} />
+          <input
+            type="text"
+            placeholder="Search questions..."
+            value={searchQuery}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              setFocusedIdx(-1);
+            }}
+          />
+        </div>
+
+        <div
+          className="sidebar-list"
+          role="listbox"
+          tabIndex={0}
+          onKeyDown={handleSidebarKeyDown}
+        >
           {loadingPyqs ? (
             <div className="loading-bar" style={{ justifyContent: 'center', padding: '32px 0' }}>
               <Loader2 size={16} />
               Loading…
             </div>
+          ) : pyqs.length === 0 ? (
+            <div className="sidebar-empty">
+              <p>No PYQs indexed yet.</p>
+              <p>Run the ingestion pipeline to add questions.</p>
+            </div>
           ) : (
-            pyqs.map((item) => {
-              const isActive = selectedPyq?.pyq_id === item.pyq_id;
-              return (
-                <button
-                  key={item.pyq_id}
-                  className={`pyq-item ${isActive ? 'active' : ''}`}
-                  onClick={() => handleSelectPyq(item)}
-                >
-                  <p className="pyq-item-source">
-                    <span className="dot" />
-                    {item.file_name || 'PYQ Source'}
-                  </p>
-                  <p className="pyq-item-text">{item.text}</p>
-                </button>
-              );
-            })
+            Object.entries(groupedPyqs).map(([fileName, items]) => (
+              <div key={fileName} className="pyq-group">
+                <p className="pyq-group-label">{fileName}</p>
+                {items.map((item) => {
+                  const isActive = selectedPyq?.pyq_id === item.pyq_id;
+                  const isFocused =
+                    focusedIdx >= 0 &&
+                    filteredPyqs[focusedIdx]?.pyq_id === item.pyq_id;
+                  return (
+                    <button
+                      key={item.pyq_id}
+                      className={`pyq-item ${isActive ? 'active' : ''} ${isFocused ? 'focused' : ''}`}
+                      onClick={() => handleSelectPyq(item)}
+                    >
+                      <p className="pyq-item-source">
+                        <span className="dot" />
+                        {item.file_name || 'PYQ Source'}
+                      </p>
+                      <p className="pyq-item-text">{item.text}</p>
+                    </button>
+                  );
+                })}
+              </div>
+            ))
           )}
         </div>
       </aside>
@@ -267,9 +345,15 @@ export default function QueryPage() {
 
                 {/* Loading */}
                 {loadingResult && (
-                  <div className="loading-bar">
-                    <Loader2 size={16} />
-                    Retrieving &amp; scoring NCERT paragraphs…
+                  <div className="skeleton-list">
+                    {[1, 2].map((n) => (
+                      <div key={n} className="skeleton-card">
+                        <div className="skeleton-line short" />
+                        <div className="skeleton-line" />
+                        <div className="skeleton-line" />
+                        <div className="skeleton-line medium" />
+                      </div>
+                    ))}
                   </div>
                 )}
 
@@ -290,6 +374,12 @@ export default function QueryPage() {
                         <span className="match-badge rank">Rank {match.rank}</span>
                         <span className="match-badge score">Score {match.score.toFixed(4)}</span>
                         <span className="match-badge file">{match.file_name}</span>
+                      </div>
+
+                      <div className="score-breakdown">
+                        <span title="Cross-encoder">CE: {match.rerank_score?.toFixed(3)}</span>
+                        <span title="Vector similarity">Vec: {match.vector_score?.toFixed(3)}</span>
+                        <span title="BM25 keyword">BM25: {match.bm25_score?.toFixed(3)}</span>
                       </div>
 
                       <div className="score-bar-track">
